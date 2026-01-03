@@ -1,275 +1,263 @@
-# lab_script.py
+# lab_script_fixed.py
 """
-Lab Assignment 3 - Practical Introduction to LLaMA Models
-Version avec demande interactive du token si nécessaire
+Lab Assignment 3 - Version corrigée
 """
 
-# =============== AJOUTEZ CES LIGNES POUR FIX SSL ===============
+# =============== FIX SSL ===============
 import os
 import ssl
 import warnings
-import sys
 
-# Fix pour les problèmes de certificat SSL
 ssl._create_default_https_context = ssl._create_unverified_context
 os.environ['CURL_CA_BUNDLE'] = ''
 os.environ['REQUESTS_CA_BUNDLE'] = ''
 os.environ['HF_HUB_DISABLE_SSL_VERIFICATION'] = '1'
 warnings.filterwarnings("ignore")
-# ================================================================
+# =======================================
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, BitsAndBytesConfig
 from huggingface_hub import login
 
 # ----------------------------
-# 0. FONCTION POUR DEMANDER LE TOKEN INTERACTIVEMENT
+# CONFIGURATION SÉCURISÉE
 # ----------------------------
-def get_hf_token_interactive():
-    """Demande le token à l'utilisateur de manière interactive"""
+def get_token():
+    """Récupère le token de manière sécurisée"""
     
+    # Essayer d'abord .env
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        token = os.getenv("HUGGING_FACE_HUB_TOKEN")
+        if token:
+            return token
+    except:
+        pass
+    
+    # Demander à l'utilisateur
     print("\n" + "=" * 60)
-    print("🔐 AUTHENTIFICATION HUGGING FACE")
+    print("🔐 TOKEN HUGGING FACE REQUIS")
     print("=" * 60)
     
-    print("\nPour utiliser LLaMA 3.2, vous avez besoin d'un token Hugging Face.")
-    print("\nSi vous n'avez pas de token, vous pouvez:")
-    print("1. Utiliser un modèle open-source (appuyez sur Entrée)")
-    print("2. Ou obtenir un token sur: https://huggingface.co/settings/tokens")
+    print("\nPour obtenir un token:")
+    print("1. Allez sur: https://huggingface.co/settings/tokens")
+    print("2. Créez un token 'read'")
+    print("3. Copiez-le (il commence par 'hf_')")
+    print("\n⚠️  ATTENTION: Ne partagez jamais votre token !")
     
-    choice = input("\nVoulez-vous entrer un token? (o/N): ").strip().lower()
+    token = input("\nEntrez votre token (masqué): ")
     
-    if choice == 'o' or choice == 'oui':
-        print("\n" + "-" * 40)
-        print("INSTRUCTIONS:")
-        print("1. Allez sur: https://huggingface.co/settings/tokens")
-        print("2. Créez un nouveau token (niveau 'read')")
-        print("3. Copiez le token (commence par 'hf_')")
-        print("-" * 40)
-        
-        token = input("\nEntrez votre token Hugging Face: ").strip()
-        
-        # Vérification basique
-        if token and token.startswith('hf_'):
-            # Option: sauvegarder dans .env
-            save = input("\nVoulez-vous sauvegarder dans .env pour la prochaine fois? (o/N): ").strip().lower()
-            if save == 'o' or save == 'oui':
-                with open(".env", "w") as f:
-                    f.write(f"HUGGING_FACE_HUB_TOKEN={token}")
-                print("✅ Token sauvegardé dans .env")
-            
-            return token
-        else:
-            print("⚠️  Token invalide ou vide. Utilisation d'un modèle open-source.")
-            return None
-    else:
-        print("✅ Utilisation d'un modèle open-source (pas de token requis)")
-        return None
+    # Sauvegarder optionnellement
+    save = input("\nSauvegarder dans .env? (o/n): ").lower()
+    if save == 'o':
+        with open(".env", "w") as f:
+            f.write(f"HUGGING_FACE_HUB_TOKEN={token}")
+        print("✅ Token sauvegardé (ajoutez .env à .gitignore !)")
+    
+    return token
 
-# ----------------------------
-# 1. RÉCUPÉRATION DU TOKEN
-# ----------------------------
-HF_TOKEN = None
-USE_LLAMA = False
+# Récupérer le token
+HF_TOKEN = get_token()
 
-# Essayer d'abord les sources automatiques
+# Authentification
 try:
-    from dotenv import load_dotenv
-    load_dotenv()
-    HF_TOKEN = os.getenv("HUGGING_FACE_HUB_TOKEN")
-    if HF_TOKEN:
-        print("✅ Token trouvé dans .env")
-        USE_LLAMA = True
-except:
-    pass
-
-# Si pas de token, demander interactivement
-if not HF_TOKEN:
-    HF_TOKEN = get_hf_token_interactive()
-    if HF_TOKEN:
-        USE_LLAMA = True
-
-# Authentification si token disponible
-if USE_LLAMA and HF_TOKEN:
-    try:
-        login(token=HF_TOKEN)
-        print("✅ Authentification Hugging Face réussie")
-    except Exception as e:
-        print(f"⚠️  Erreur d'authentification: {e}")
-        print("Utilisation d'un modèle open-source à la place...")
-        USE_LLAMA = False
+    login(token=HF_TOKEN)
+    print("✅ Authentification réussie")
+    USE_LLAMA = True
+except Exception as e:
+    print(f"❌ Erreur: {e}")
+    print("Utilisation d'un modèle open-source...")
+    USE_LLAMA = False
 
 # ----------------------------
-# 2. SETUP & MODEL OVERVIEW
+# CHARGEMENT DU MODÈLE
 # ----------------------------
 print("\n" + "=" * 60)
-print("1. SETUP & MODEL OVERVIEW")
+print("1. CHARGEMENT DU MODÈLE")
 print("=" * 60)
 
-# Choix du modèle selon l'accès
+# Choix du modèle
 if USE_LLAMA:
     MODEL_NAME = "meta-llama/Llama-3.2-1B"
-    print(f"🎯 Modèle LLaMA sélectionné: {MODEL_NAME}")
+    print(f"🎯 LLaMA 3.2-1B")
 else:
-    # Modèle open-source alternatif
     MODEL_NAME = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
-    print(f"🔓 Modèle open-source sélectionné: {MODEL_NAME}")
+    print(f"🔓 TinyLlama 1.1B")
 
-print(f"\nChargement du modèle: {MODEL_NAME}")
+# Vérifier si GPU est disponible
+if torch.cuda.is_available():
+    device = "cuda"
+    print("✅ GPU disponible")
+else:
+    device = "cpu"
+    print("⚠️  GPU non disponible - Utilisation du CPU")
+
+print(f"\nChargement de {MODEL_NAME}...")
 
 try:
-    # Configuration de quantisation
-    bnb_config = BitsAndBytesConfig(
-        load_in_4bit=True,
-        bnb_4bit_quant_type="nf4",
-        bnb_4bit_compute_dtype=torch.float16,
-        bnb_4bit_use_double_quant=True
-    )
-    
     # Charger le tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-    tokenizer.pad_token = tokenizer.eos_token
+    if USE_LLAMA:
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, token=HF_TOKEN)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
     
-    # Charger le modèle avec quantisation
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        quantization_config=bnb_config,
-        torch_dtype=torch.float16,
-        device_map="auto"
-    )
+    # Configurer le tokenizer
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
     
-    print("✅ Modèle chargé avec succès!")
-    print(f"\n📊 Informations du modèle:")
-    print(f"   • Architecture: {model.config.model_type}")
-    print(f"   • Taille du vocabulaire: {model.config.vocab_size:,}")
-    print(f"   • Device: {model.device}")
+    # Charger le modèle
+    if USE_LLAMA:
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_NAME,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            device_map="auto" if device == "cuda" else None,
+            token=HF_TOKEN
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_NAME,
+            torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+            device_map="auto" if device == "cuda" else None
+        )
+    
+    if device == "cpu":
+        model = model.to(device)
+    
+    print(f"✅ Modèle chargé sur {device}")
+    print(f"📊 Paramètres: {model.num_parameters():,}")
     
 except Exception as e:
-    print(f"❌ Erreur lors du chargement: {e}")
-    print("\nTentative avec un modèle plus léger...")
-    
-    # Fallback ultra-léger
+    print(f"❌ Erreur: {e}")
+    print("\nChargement d'un modèle léger...")
     MODEL_NAME = "microsoft/phi-2"
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
-        torch_dtype=torch.float16,
-        device_map="auto",
+        torch_dtype=torch.float16 if device == "cuda" else torch.float32,
         trust_remote_code=True
-    )
-    print(f"✅ Modèle de secours {MODEL_NAME} chargé!")
+    ).to(device)
+    print(f"✅ {MODEL_NAME} chargé")
 
 # ----------------------------
-# 3. BASIC INFERENCE & PROMPTING
+# FORMATAGE DES PROMPTS
 # ----------------------------
-print("\n" + "=" * 60)
-print("2. BASIC INFERENCE & PROMPTING - Stratégies de décodage")
-print("=" * 60)
+def format_prompt_llama(user_message):
+    """Format correct pour LLaMA 3.2"""
+    return f"""<|begin_of_text|><|start_header_id|>user<|end_header_id|>
 
-# Fonction pour formater le prompt selon le modèle
-def format_prompt(user_message):
-    if "llama" in MODEL_NAME.lower():
-        return f"""<|begin_of_text|><|start_header_id|>user<|end_header_id|>
-
-{user_message}<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+{user_message}<|eot_id|>
+<|start_header_id|>assistant<|end_header_id|>
 
 """
-    elif "phi" in MODEL_NAME.lower():
-        return f"Instruct: {user_message}\nOutput:"
+
+def format_prompt_general(user_message):
+    """Format pour autres modèles"""
+    return f"### Instruction:\n{user_message}\n\n### Response:\n"
+
+# ----------------------------
+# TEST SIMPLE
+# ----------------------------
+print("\n" + "=" * 60)
+print("2. TEST DE GÉNÉRATION")
+print("=" * 60)
+
+# Choisir le bon format
+if "llama" in MODEL_NAME.lower():
+    prompt_text = format_prompt_llama("Explain AI to a 10-year-old.")
+else:
+    prompt_text = format_prompt_general("Explain AI to a 10-year-old.")
+
+print("Prompt formaté:")
+print(prompt_text[:100] + "..." if len(prompt_text) > 100 else prompt_text)
+
+# Tokenisation
+inputs = tokenizer(prompt_text, return_tensors="pt").to(device)
+
+# Génération avec paramètres optimisés
+with torch.no_grad():
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=100,
+        temperature=0.7,
+        top_p=0.9,
+        do_sample=True,
+        pad_token_id=tokenizer.pad_token_id,
+        eos_token_id=tokenizer.eos_token_id,
+        no_repeat_ngram_size=3  # Évite la répétition
+    )
+
+# Décodage
+response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+
+# Extraire la réponse (après le prompt)
+if "llama" in MODEL_NAME.lower():
+    # Pour LLaMA format
+    if "<|start_header_id|>assistant<|end_header_id|>" in response:
+        answer = response.split("<|start_header_id|>assistant<|end_header_id|>")[-1].strip()
     else:
-        return f"<|user|>\n{user_message}\n<|assistant|>\n"
+        answer = response
+else:
+    # Pour format général
+    if "### Response:" in response:
+        answer = response.split("### Response:")[-1].strip()
+    else:
+        answer = response
 
-prompt_text = "Explain transformers (the AI model) to a 12-year-old."
-prompt = format_prompt(prompt_text)
+print("\n🤖 Réponse générée:")
+print("-" * 40)
+print(answer)
+print("-" * 40)
 
-print("Prompt original:")
-print(f"  '{prompt_text}'")
-print("\nPrompt formaté:")
-print(f"  '{prompt[:80]}...'")
+# ----------------------------
+# DIFFÉRENTES STRATÉGIES
+# ----------------------------
+print("\n" + "=" * 60)
+print("3. STRATÉGIES DE DÉCODAGE")
+print("=" * 60)
 
-# Encodage
-inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
+strategies = [
+    ("Greedy", {"do_sample": False, "temperature": None}),
+    ("Sampling temp=0.7", {"do_sample": True, "temperature": 0.7}),
+    ("Top-k k=50", {"do_sample": True, "top_k": 50, "temperature": 0.7}),
+]
 
-# Tests des différentes stratégies de décodage
-strategies = {
-    "Greedy Decoding": {
-        "do_sample": False,
-        "max_new_tokens": 100
-    },
-    "Sampling (temp=0.7)": {
-        "do_sample": True,
-        "temperature": 0.7,
-        "max_new_tokens": 100
-    },
-    "Top-k Sampling (k=50)": {
-        "do_sample": True,
-        "top_k": 50,
-        "max_new_tokens": 100
-    }
-}
+test_prompt = "What is machine learning?" if "llama" in MODEL_NAME.lower() else "What is machine learning?"
+if "llama" in MODEL_NAME.lower():
+    test_prompt = format_prompt_llama(test_prompt)
+else:
+    test_prompt = format_prompt_general(test_prompt)
 
-for strategy_name, params in strategies.items():
-    print(f"\n{'─' * 40}")
-    print(f"🎯 {strategy_name}")
-    print(f"{'─' * 40}")
+inputs = tokenizer(test_prompt, return_tensors="pt").to(device)
+
+for name, params in strategies:
+    print(f"\n🔧 {name}:")
+    print("-" * 30)
     
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
+            max_new_tokens=50,
             **params,
-            pad_token_id=tokenizer.eos_token_id
+            pad_token_id=tokenizer.pad_token_id,
+            eos_token_id=tokenizer.eos_token_id
         )
     
-    # Décodage et affichage
     response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    # Extraire seulement la réponse après le prompt
-    response_text = response[len(prompt):].strip()
-    print(response_text[:250] + "..." if len(response_text) > 250 else response_text)
-
-# ----------------------------
-# 4. PROMPT ENGINEERING
-# ----------------------------
-print("\n" + "=" * 60)
-print("3. PROMPT ENGINEERING - Techniques avancées")
-print("=" * 60)
-
-# a) Zero-shot
-zero_shot_prompt = format_prompt("Is the following statement true or false? The Earth orbits the Sun.")
-print("\n🔍 Zero-shot Prompting:")
-inputs = tokenizer(zero_shot_prompt, return_tensors="pt").to(model.device)
-output = model.generate(**inputs, max_new_tokens=50, do_sample=False)
-response = tokenizer.decode(output[0], skip_special_tokens=True)
-print(response.split("assistant")[-1].strip() if "assistant" in response else response[-150:])
-
-# b) One-shot
-one_shot_text = """Q: What is the capital of France?
-A: Paris
-
-Q: What is the capital of Germany?
-A:"""
-one_shot_prompt = format_prompt(one_shot_text)
-print("\n🎯 One-shot Prompting:")
-inputs = tokenizer(one_shot_prompt, return_tensors="pt").to(model.device)
-output = model.generate(**inputs, max_new_tokens=20, do_sample=False)
-response = tokenizer.decode(output[0], skip_special_tokens=True)
-answer = response.split("A:")[-1].strip().split("\n")[0]
-print(f"Réponse: {answer}")
-
-# c) Fact-checking avec sortie structurée
-fact_text = """Fact-check the following statement: "The Moon is made of cheese."
-Provide your answer in this format:
-- Statement: [original statement]
-- Truthfulness: [true/false/partially true]
-- Explanation: [brief explanation]"""
-
-fact_prompt = format_prompt(fact_text)
-print("\n✅ Fact-checking with Structured Output:")
-inputs = tokenizer(fact_prompt, return_tensors="pt").to(model.device)
-output = model.generate(**inputs, max_new_tokens=150, do_sample=True, temperature=0.3)
-response = tokenizer.decode(output[0], skip_special_tokens=True)
-fact_response = response.split("assistant")[-1].strip() if "assistant" in response else response[-300:]
-print(fact_response[:300])
+    
+    if "llama" in MODEL_NAME.lower():
+        if "<|start_header_id|>assistant<|end_header_id|>" in response:
+            answer = response.split("<|start_header_id|>assistant<|end_header_id|>")[-1].strip()
+        else:
+            answer = response[-100:]
+    else:
+        if "### Response:" in response:
+            answer = response.split("### Response:")[-1].strip()
+        else:
+            answer = response[-100:]
+    
+    print(answer[:200])
 
 print("\n" + "=" * 60)
-print("✅ LAB SCRIPT TERMINÉ AVEC SUCCÈS!")
+print("✅ LAB TERMINÉ AVEC SUCCÈS !")
 print("=" * 60)

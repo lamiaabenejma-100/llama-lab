@@ -1,0 +1,14 @@
+# .gitignore
+.env
+*.env
+secrets/
+__pycache__/
+*.pyc
+models/
+checkpoints/
+*.log
+.DS_Store
+.vscode/
+.idea/
+*.safetensors
+*.bin
