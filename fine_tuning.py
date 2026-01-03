@@ -1,8 +1,21 @@
 # fine_tuning.py
 """
-Fine-tuning LLaMA 3.2-1B with LoRA/QLoRA
-Parameter-efficient fine-tuning for sentiment analysis
+Fine-tuning avec LoRA/QLoRA
+Version avec demande interactive du token si nécessaire
 """
+
+# =============== AJOUTEZ CES LIGNES POUR FIX SSL ===============
+import os
+import ssl
+import warnings
+
+# Fix pour les problèmes de certificat SSL
+ssl._create_default_https_context = ssl._create_unverified_context
+os.environ['CURL_CA_BUNDLE'] = ''
+os.environ['REQUESTS_CA_BUNDLE'] = ''
+os.environ['HF_HUB_DISABLE_SSL_VERIFICATION'] = '1'
+warnings.filterwarnings("ignore")
+# ================================================================
 
 import torch
 from datasets import load_dataset
@@ -16,26 +29,95 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model, TaskType, prepare_model_for_kbit_training
 from huggingface_hub import login
-import os
-from dotenv import load_dotenv
 import numpy as np
+
+# ----------------------------
+# FONCTION POUR DEMANDER LE TOKEN
+# ----------------------------
+def get_hf_token_interactive():
+    """Demande le token à l'utilisateur de manière interactive"""
+    
+    print("\n" + "=" * 60)
+    print("🔐 AUTHENTIFICATION POUR FINE-TUNING")
+    print("=" * 60)
+    
+    print("\nPour fine-tuner LLaMA 3.2, un token Hugging Face est requis.")
+    print("\nSi vous n'avez pas de token, vous pouvez:")
+    print("1. Utiliser un modèle open-source (appuyez sur Entrée)")
+    print("2. Ou obtenir un token sur: https://huggingface.co/settings/tokens")
+    
+    choice = input("\nVoulez-vous entrer un token? (o/N): ").strip().lower()
+    
+    if choice == 'o' or choice == 'oui':
+        print("\n" + "-" * 40)
+        print("INSTRUCTIONS:")
+        print("1. Allez sur: https://huggingface.co/settings/tokens")
+        print("2. Créez un nouveau token (niveau 'read')")
+        print("3. Copiez le token (commence par 'hf_')")
+        print("-" * 40)
+        
+        token = input("\nEntrez votre token Hugging Face: ").strip()
+        
+        # Vérification basique
+        if token and token.startswith('hf_'):
+            # Option: sauvegarder dans .env
+            save = input("\nVoulez-vous sauvegarder dans .env pour la prochaine fois? (o/N): ").strip().lower()
+            if save == 'o' or save == 'oui':
+                with open(".env", "w") as f:
+                    f.write(f"HUGGING_FACE_HUB_TOKEN={token}")
+                print("✅ Token sauvegardé dans .env")
+            
+            return token
+        else:
+            print("⚠️  Token invalide ou vide. Utilisation d'un modèle open-source.")
+            return None
+    else:
+        print("✅ Utilisation d'un modèle open-source pour le fine-tuning")
+        return None
 
 # ----------------------------
 # CONFIGURATION
 # ----------------------------
-load_dotenv()
-HF_TOKEN = os.getenv("HUGGING_FACE_HUB_TOKEN")
+HF_TOKEN = None
+USE_LLAMA = False
 
+# Essayer d'abord les sources automatiques
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+    HF_TOKEN = os.getenv("HUGGING_FACE_HUB_TOKEN")
+    if HF_TOKEN:
+        print("✅ Token trouvé dans .env")
+        USE_LLAMA = True
+except:
+    pass
+
+# Si pas de token, demander interactivement
 if not HF_TOKEN:
-    print("❌ Token Hugging Face non trouvé!")
-    exit(1)
+    HF_TOKEN = get_hf_token_interactive()
+    if HF_TOKEN:
+        USE_LLAMA = True
 
-login(token=HF_TOKEN)
+# Authentification si token disponible
+if USE_LLAMA and HF_TOKEN:
+    try:
+        login(token=HF_TOKEN)
+        print("✅ Authentification Hugging Face réussie")
+    except Exception as e:
+        print(f"⚠️  Erreur d'authentification: {e}")
+        print("Utilisation d'un modèle open-source à la place...")
+        USE_LLAMA = False
 
-# Modèle LLaMA 3.2
-MODEL_NAME = "meta-llama/Llama-3.2-1B"
+# Choix du modèle
+if USE_LLAMA:
+    MODEL_NAME = "meta-llama/Llama-3.2-1B"
+    print(f"\n🎯 Modèle pour fine-tuning: {MODEL_NAME}")
+else:
+    MODEL_NAME = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+    print(f"\n🔓 Modèle open-source pour fine-tuning: {MODEL_NAME}")
+
 DATASET_NAME = "imdb"
-OUTPUT_DIR = "./llama3.2-finetuned-lora"
+OUTPUT_DIR = "./llama-finetuned-lora"
 
 # Paramètres LoRA
 LORA_R = 8
@@ -49,7 +131,7 @@ GRAD_ACCUM = 4
 LEARNING_RATE = 2e-4
 
 print("=" * 60)
-print("FINE-TUNING LLaMA 3.2-1B WITH LoRA")
+print("FINE-TUNING AVEC LoRA/QLoRA")
 print("=" * 60)
 
 # ----------------------------
@@ -57,7 +139,7 @@ print("=" * 60)
 # ----------------------------
 print(f"\n1. Chargement du modèle {MODEL_NAME}...")
 
-# Configuration de quantisation 4-bit
+# Configuration de quantisation
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
     bnb_4bit_quant_type="nf4",
@@ -68,17 +150,29 @@ bnb_config = BitsAndBytesConfig(
 
 try:
     # Tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, token=HF_TOKEN)
+    if USE_LLAMA and HF_TOKEN:
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, token=HF_TOKEN)
+    else:
+        tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    
     tokenizer.pad_token = tokenizer.eos_token
     
     # Modèle avec quantisation
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        quantization_config=bnb_config,
-        torch_dtype=torch.float16,
-        device_map="auto",
-        token=HF_TOKEN
-    )
+    if USE_LLAMA and HF_TOKEN:
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_NAME,
+            quantization_config=bnb_config,
+            torch_dtype=torch.float16,
+            device_map="auto",
+            token=HF_TOKEN
+        )
+    else:
+        model = AutoModelForCausalLM.from_pretrained(
+            MODEL_NAME,
+            quantization_config=bnb_config,
+            torch_dtype=torch.float16,
+            device_map="auto"
+        )
     
     # Préparer le modèle pour l'entraînement k-bit
     model = prepare_model_for_kbit_training(model)
@@ -124,27 +218,22 @@ print(f"\n3. Chargement du dataset {DATASET_NAME}...")
 dataset = load_dataset(DATASET_NAME)
 
 # Prendre un sous-ensemble pour l'entraînement rapide
-train_dataset = dataset["train"].select(range(1000))
-eval_dataset = dataset["test"].select(range(200))
+train_dataset = dataset["train"].select(range(500))  # Réduit pour plus de rapidité
+eval_dataset = dataset["test"].select(range(100))
 
 print(f"   • Exemples d'entraînement: {len(train_dataset)}")
 print(f"   • Exemples d'évaluation: {len(eval_dataset)}")
 
 # Fonction de préparation des données
 def preprocess_function(examples):
-    # Créer des prompts pour la classification de sentiments
+    # Format simplifié pour accélérer
     prompts = []
     for text, label in zip(examples["text"], examples["label"]):
         sentiment = "positive" if label == 1 else "negative"
-        prompt = f"""<|begin_of_text|><|start_header_id|>user<|end_header_id|>
-
-Analyze the sentiment of this movie review:
-
-"{text[:500]}"
-
-Sentiment:<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-{sentiment}<|eot_id|>"""
+        if "llama" in MODEL_NAME.lower():
+            prompt = f"""Review: {text[:300]}\nSentiment: {sentiment}"""
+        else:
+            prompt = f"""Analyze sentiment: {text[:300]}\nSentiment: {sentiment}"""
         prompts.append(prompt)
     
     # Tokenizer
@@ -152,11 +241,10 @@ Sentiment:<|eot_id|><|start_header_id|>assistant<|end_header_id|>
         prompts,
         truncation=True,
         padding="max_length",
-        max_length=512,
+        max_length=256,
         return_tensors=None
     )
     
-    # Les labels sont les input_ids pour le language modeling
     tokenized["labels"] = tokenized["input_ids"].copy()
     
     return tokenized
@@ -166,14 +254,14 @@ print("   • Préprocessing des données...")
 tokenized_train = train_dataset.map(
     preprocess_function,
     batched=True,
-    batch_size=32,
+    batch_size=16,
     remove_columns=train_dataset.column_names
 )
 
 tokenized_eval = eval_dataset.map(
     preprocess_function,
     batched=True,
-    batch_size=32,
+    batch_size=16,
     remove_columns=eval_dataset.column_names
 )
 
@@ -244,19 +332,14 @@ print(f"   • Loss finale: {train_result.training_loss:.4f}")
 # ----------------------------
 # 6. ÉVALUATION AVANT/APRÈS
 # ----------------------------
-print("\n7. Évaluation avant/après fine-tuning")
+print("\n7. Test du modèle fine-tuné")
 
-def test_sentiment(text, model, tokenizer):
+def test_sentiment(text):
     """Teste le modèle sur un texte donné"""
-    prompt = f"""<|begin_of_text|><|start_header_id|>user<|end_header_id|>
-
-Analyze the sentiment of this movie review:
-
-"{text}"
-
-Sentiment:<|eot_id|><|start_header_id|>assistant<|end_header_id|>
-
-"""
+    if "llama" in MODEL_NAME.lower():
+        prompt = f"Review: {text}\nSentiment:"
+    else:
+        prompt = f"Analyze sentiment: {text}\nSentiment:"
     
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     
@@ -270,22 +353,22 @@ Sentiment:<|eot_id|><|start_header_id|>assistant<|end_header_id|>
         )
     
     response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    sentiment = response.split("assistant")[-1].strip().lower()
+    sentiment = response.split("Sentiment:")[-1].strip().lower()
     
     return sentiment
 
 # Textes de test
 test_texts = [
-    "This movie was absolutely fantastic! The acting was superb and the story was captivating.",
-    "I was very disappointed with this film. The plot was weak and the characters were uninteresting.",
-    "An average movie with some good moments but overall nothing special."
+    "This movie was absolutely fantastic! The acting was superb.",
+    "I was very disappointed with this film. The plot was weak.",
+    "An average movie with some good moments."
 ]
 
 print("\n📊 Résultats des tests:")
 for i, text in enumerate(test_texts, 1):
     print(f"\nTest {i}:")
-    print(f"   Texte: {text[:80]}...")
-    sentiment = test_sentiment(text, model, tokenizer)
+    print(f"   Texte: {text[:60]}...")
+    sentiment = test_sentiment(text)
     print(f"   Sentiment prédit: {sentiment}")
 
 print("\n" + "=" * 60)
