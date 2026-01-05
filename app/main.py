@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Depends
 from pydantic import BaseModel
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager ## to initialize the llama model 
 from llama_cpp import Llama
 
 from llm import init_model
@@ -10,13 +10,13 @@ from api_models import (
     HealthCheck,
     ChatRequest,
 )
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware 
 
 
 # App setup:
 @asynccontextmanager
-async def lifespan(app: FastAPI):
-    app.state.llm = init_model()
+async def lifespan(app: FastAPI):    #lifespan is called when FastAPI starts and stops
+    app.state.llm = init_model()    # Initialize the LLaMA model at startup
     yield
     # NOTE: Clean up resources if needed when the app is shutting down
 
@@ -26,17 +26,17 @@ app = FastAPI(lifespan=lifespan)
 
 
 # CORS:
-app.add_middleware(
+app.add_middleware(        ## Autorise les requêtes venant de n’importe quelle origine
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],    # Allow requests from any origin
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["*"],       # Allow all HTTP methods
     allow_headers=["*"],
 )
 
 
 # Dependencies:
-def get_llm():
+def get_llm():    # this function returns the LLaMA model that was loaded when the API started
     return app.state.llm
 
 
@@ -50,7 +50,7 @@ def read_root():
 def get_answer(data: QuestionRequest, llm: Llama = Depends(get_llm)):
     answer = llm(
         f"Q: {data.q} A:",  # Prompt
-        max_tokens=32,  # Generate up to 32 tokens, set to None to generate up to the end of the context window
+        max_tokens=32,  #limit how long the model’s answer can be
         stop=[
             "Q:",
             "\n",
@@ -72,7 +72,7 @@ def chat(data: ChatRequest, llm: Llama = Depends(get_llm)):
         ],
     ]
     answer = llm.create_chat_completion(
-        messages=messages,
+        messages=messages,   # Send all chat messages to the model
     )
     return QuestionResponse(answer=answer["choices"][0]["message"]["content"])
 

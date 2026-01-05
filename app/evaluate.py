@@ -2,7 +2,7 @@ import requests
 
 API_URL = "http://localhost:8000/chat"
 
-# 1️⃣ Liste de conversations à tester
+# Liste de conversations à tester
 test_chats = [
     {
         "messages": [
@@ -31,7 +31,7 @@ def evaluate_chat():
         response = requests.post(API_URL, json=chat).json()
         answer = response.get("answer", "").strip()
 
-        if chat["expected_answer"].lower() in answer.lower():
+        if chat["expected_answer"].lower() in answer.lower():   # if the assitant answer contains eth expected answer 
             print(f"[✅] Réponse correcte: {answer}")
             correct += 1
         else:
